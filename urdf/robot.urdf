@@ -1,0 +1,295 @@
+<?xml version="1.0"?>
+<robot name="pick_and_drop_arm">
+
+  <!-- WORLD -->
+  <link name="world"/>
+
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================= LINKS ================= -->
+
+  <!-- TEMPLATE NOTE:
+       All links now include visual + collision + inertial
+       (important for Gazebo + control)
+  -->
+
+  <!-- BASE -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/base.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/base.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.02" ixy="0" ixz="0"
+               iyy="0.02" iyz="0"
+               izz="0.02"/>
+    </inertial>
+  </link>
+
+  <!-- LINK1 -->
+  <link name="link1">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/1.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0"
+               iyy="0.01" iyz="0"
+               izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- ARM1 -->
+  <link name="arm1">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/arm1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/arm1.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0"
+               iyy="0.01" iyz="0"
+               izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- ARM2 -->
+  <link name="arm2">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/arm2.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/arm2.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0"
+               iyy="0.01" iyz="0"
+               izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- ARM3 -->
+  <link name="arm3">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/arm3.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/arm3.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0"
+               iyy="0.01" iyz="0"
+               izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- WRIST -->
+  <link name="wrist">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/wrist.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/wrist.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.005" ixy="0" ixz="0"
+               iyy="0.005" iyz="0"
+               izz="0.005"/>
+    </inertial>
+  </link>
+
+  <!-- FINGER1 -->
+  <link name="finger1">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/finger1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/finger1.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="0.2"/>
+      <inertia ixx="0.002" ixy="0" ixz="0"
+               iyy="0.002" iyz="0"
+               izz="0.002"/>
+    </inertial>
+  </link>
+
+  <!-- FINGER2 -->
+  <link name="finger2">
+    <visual>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/finger2.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://pick_and_drop/meshes/finger2.dae"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="0.2"/>
+      <inertia ixx="0.002" ixy="0" ixz="0"
+               iyy="0.002" iyz="0"
+               izz="0.002"/>
+    </inertial>
+  </link>
+
+  <!-- ================= JOINTS ================= -->
+
+  <joint name="base_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="10" velocity="1.0"/>
+  </joint>
+
+  <joint name="joint1" type="revolute">
+    <parent link="link1"/>
+    <child link="arm1"/>
+    <origin xyz="0 0 1.67744"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10" velocity="1.0"/>
+  </joint>
+
+  <joint name="joint2" type="revolute">
+    <parent link="arm1"/>
+    <child link="arm2"/>
+    <origin xyz="0 2.05731 2.08253"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10" velocity="1.0"/>
+  </joint>
+
+  <joint name="joint3" type="revolute">
+    <parent link="arm2"/>
+    <child link="arm3"/>
+    <origin xyz="0 -2.041415 2.09397"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10" velocity="1.0"/>
+  </joint>
+
+  <joint name="joint4" type="revolute">
+    <parent link="arm3"/>
+    <child link="wrist"/>
+    <origin xyz="0 -2.104915 -0.30269"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10" velocity="1.0"/>
+  </joint>
+
+  <joint name="finger1_joint" type="revolute">
+    <parent link="wrist"/>
+    <child link="finger1"/>
+    <origin xyz="0.005756 -1.4504 -0.85021"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="0.8" effort="5" velocity="1.0"/>
+  </joint>
+
+  <joint name="finger2_joint" type="revolute">
+    <parent link="wrist"/>
+    <child link="finger2"/>
+    <origin xyz="0.005756 -0.71318 -1.52533"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="0" upper="0.8" effort="5" velocity="1.0"/>
+  </joint>
+
+  <!-- ================= ROS2 CONTROL ================= -->
+
+  <ros2_control name="arm_system" type="system">
+    <hardware>
+      <plugin>fake_components/GenericSystem</plugin>
+    </hardware>
+
+    <joint name="base_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="joint1">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="joint2">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="joint3">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="joint4">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="finger1_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="finger2_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+  </ros2_control>
+
+  <!-- ================= GAZEBO ================= -->
+
+  <gazebo>
+    <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control"/>
+  </gazebo>
+
+</robot>

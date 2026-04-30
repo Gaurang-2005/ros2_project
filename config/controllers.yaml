@@ -1,0 +1,36 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+arm_controller:
+  ros__parameters:
+    joints:
+      - base_joint
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+      - finger1_joint
+      - finger2_joint
+
+    command_interfaces:
+      - position
+
+    state_interfaces:
+      - position
+      - velocity
+
+    gains:
+      base_joint: {p: 100.0, d: 5.0}
+      joint1:     {p: 100.0, d: 5.0}
+      joint2:     {p: 100.0, d: 5.0}
+      joint3:     {p: 100.0, d: 5.0}
+      joint4:     {p: 100.0, d: 5.0}
+      finger1_joint: {p: 50.0, d: 2.0}
+      finger2_joint: {p: 50.0, d: 2.0}
