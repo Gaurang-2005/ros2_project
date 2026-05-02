@@ -1,60 +1,62 @@
-# bridge.yaml
-# ros_gz_bridge configuration for pick_and_drop arm
-# =====================================================
-# Maps ROS 2 topics (std_msgs/Float64) → Ignition topics (ignition.msgs.Double)
-# Direction [ROS2IGN] means: publish on ROS → received by Ignition controller
-#
-# Also bridges box pose: Ignition → ROS (so control.py can read box position)
-#
-# Usage in launch file:
-#   ros2 run ros_gz_bridge parameter_bridge --ros-args --params-file bridge.yaml
-# ─────────────────────────────────────────────────────────────────────────────
+# ================= TORQUE CONTROL =================
 
-- ros_topic_name: "/base_joint_cmd"
-  gz_topic_name:  "/base_joint_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/base_joint/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/base_joint/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-- ros_topic_name: "/joint1_cmd"
-  gz_topic_name:  "/joint1_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/joint1/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/joint1/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-- ros_topic_name: "/joint2_cmd"
-  gz_topic_name:  "/joint2_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/joint2/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/joint2/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-- ros_topic_name: "/joint3_cmd"
-  gz_topic_name:  "/joint3_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/joint3/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/joint3/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-- ros_topic_name: "/joint4_cmd"
-  gz_topic_name:  "/joint4_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/joint4/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/joint4/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-- ros_topic_name: "/finger1_cmd"
-  gz_topic_name:  "/finger1_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/finger1_joint/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/finger1_joint/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-- ros_topic_name: "/finger2_cmd"
-  gz_topic_name:  "/finger2_cmd"
+- ros_topic_name: "/model/pick_and_drop_arm/joint/finger2_joint/cmd_force"
+  gz_topic_name:  "/model/pick_and_drop_arm/joint/finger2_joint/cmd_force"
   ros_type_name:  "std_msgs/msg/Float64"
-  gz_type_name:   "ignition.msgs.Double"
-  direction:      ROS_TO_GZ
+  gz_type_name:   "gz.msgs.Double"
+  direction:      BIDIRECTIONAL
 
-# Box pose: Ignition publishes → ROS reads (control.py subscribes to this)
+
+# ================= JOINT STATES =================
+# ⚠️ Only works if joint_state topic exists OR plugin is added
+
+- ros_topic_name: "/joint_states"
+  gz_topic_name:  "/world/empty/model/pick_and_drop_arm/joint_state"
+  ros_type_name:  "sensor_msgs/msg/JointState"
+  gz_type_name:   "gz.msgs.Model"
+  direction:      GZ_TO_ROS
+
+
+# ================= BOX POSE =================
+
 - ros_topic_name: "/model/box/pose"
   gz_topic_name:  "/model/box/pose"
   ros_type_name:  "geometry_msgs/msg/Pose"
-  gz_type_name:   "ignition.msgs.Pose"
+  gz_type_name:   "gz.msgs.Pose"
   direction:      GZ_TO_ROS

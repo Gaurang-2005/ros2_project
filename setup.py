@@ -33,6 +33,10 @@ setup(
     entry_points={
         'console_scripts': [
             'control = pick_and_drop.control:main',
+            'teleop_ik = pick_and_drop.teleop_ik:main',
+            'pick_and_place = pick_and_drop.pick_and_place:main',
+            'torque_controller = pick_and_drop.torque_controller:main',
+            'angle_to_torque = pick_and_drop.angle_to_torque:main',
         ],
     },
 )

@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64MultiArray, Float64
+from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import JointState
 import math
 
@@ -22,33 +22,10 @@ class AngleToTorque(Node):
         self.target = None
 
         # gains (start conservative)
-        self.kp = [500, 16000, 11000, 7000, 4000, 80, 80]
+        self.kp = [500, 10000, 5000, 2500, 1250, 50, 50]
 
         # critical damping
-        self.kd = [
-            2.5 * math.sqrt(self.kp[0]),                                      # base
-            20 * math.sqrt(self.kp[1]),               # joint1
-            17 * math.sqrt(self.kp[2]),               # joint2
-            12 * math.sqrt(self.kp[3]),               # joint3
-            9  * math.sqrt(self.kp[4]),               # joint4
-            3  * math.sqrt(self.kp[5]),               # finger1
-            3  * math.sqrt(self.kp[6])                # finger2
-        ]
-
-        # Integral action removes the steady holding error left by PD under gravity/friction.
-        self.ki = [20, 800, 600, 400, 250, 8, 8]
-        self.integral_error = [0.0]*7
-        self.integral_limit = [
-            1.0,
-            0.8,
-            0.8,
-            0.7,
-            0.7,
-            0.3,
-            0.3,
-        ]
-        self.max_torque = [500, 2500, 2200, 1600, 1200, 80, 80]
-
+        self.kd = [12.5 * math.sqrt(k) for k in self.kp]
         # finetuned steps
         self.step = 8
         self.trajectory_target = [0.0]*7
@@ -57,10 +34,7 @@ class AngleToTorque(Node):
         self.max_vel = [0.6, 0.5, 0.4, 0.3, 0.3, 1.0, 1.0]
         self.max_acc = [1.5, 1.2, 1.0, 0.8, 0.8, 2.0, 2.0]
         # publisher → torque controller
-        self.pubs = []
-        for j in self.joint_names:
-            topic = f'/model/pick_and_drop_arm/joint/{j}/cmd_force'
-            self.pubs.append(self.create_publisher(Float64, topic, 10))
+        self.pub = self.create_publisher(Float64MultiArray, '/joint_torque', 10)
 
         # subscribers
         self.create_subscription(JointState, '/joint_states', self.joint_cb, 10)
@@ -133,70 +107,32 @@ class AngleToTorque(Node):
             error = self.trajectory_target[i] - self.pos[i]
             if abs(error) > math.radians(self.step):
                 error = math.copysign(math.radians(self.step), error)
-
-            self.integral_error[i] += error * dt
-            self.integral_error[i] = max(
-                min(self.integral_error[i], self.integral_limit[i]),
-                -self.integral_limit[i]
-            )
             tau = (
                 self.kp[i]*error
-                + self.ki[i]*self.integral_error[i]
                 - self.kd[i] * self.vel[i]
             )
 
 
-            torques[i] = float(max(min(tau, self.max_torque[i]), -self.max_torque[i]))
-            # compute errors for both fingers (mirror control)
-            grip = self.target[5]
+            torques[i] = float(tau)
+        # compute errors for both fingers
+        error1 = self.trajectory_target[5] - self.pos[5]
+        error2 = self.trajectory_target[6] - self.pos[6]
+        finger_step = 1
+        # average error (best for symmetry)
+        if abs(error1) > math.radians(finger_step):
+            error1 = math.copysign(math.radians(finger_step), error1)
+        if abs(error2) > math.radians(finger_step):
+            error2 = math.copysign(math.radians(finger_step), error2)
 
-            error1 = grip - self.pos[5]
-            error2 = -grip - self.pos[6]
+        # compute torque
+        grip_tau = self.kp[5] * error1 - self.kd[5] * self.vel[5]
+        torques[5] = float(grip_tau)
+        grip_tau = self.kp[5] * error2 - self.kd[5] * self.vel[6]
+        torques[6] = float(grip_tau)
+        msg = Float64MultiArray()
+        msg.data = torques
+        self.pub.publish(msg)
 
-            finger_step = 1
-
-            # limit step (same as before)
-            if abs(error1) > math.radians(finger_step):
-                error1 = math.copysign(math.radians(finger_step), error1)
-            if abs(error2) > math.radians(finger_step):
-                error2 = math.copysign(math.radians(finger_step), error2)
-
-            # 🔥 shared velocity for symmetry
-            avg_vel = (self.vel[5] + self.vel[6]) / 2.0
-
-            # ---- finger 1 ----
-            self.integral_error[5] += error1 * dt
-            self.integral_error[5] = max(
-                min(self.integral_error[5], self.integral_limit[5]),
-                -self.integral_limit[5]
-            )
-
-            tau1 = (
-                self.kp[5] * error1
-                + self.ki[5] * self.integral_error[5]
-                - self.kd[5] * avg_vel
-            )
-
-            # ---- finger 2 ----
-            self.integral_error[6] += error2 * dt
-            self.integral_error[6] = max(
-                min(self.integral_error[6], self.integral_limit[6]),
-                -self.integral_limit[6]
-            )
-
-            tau2 = (
-                self.kp[6] * error2
-                + self.ki[6] * self.integral_error[6]
-                - self.kd[6] * avg_vel
-            )
-
-            # apply torques
-            torques[5] = float(max(min(tau1, self.max_torque[5]), -self.max_torque[5]))
-            torques[6] = float(max(min(tau2, self.max_torque[6]), -self.max_torque[6]))
-        for i in range(len(self.joint_names)):
-            msg = Float64()
-            msg.data = float(torques[i])
-            self.pubs[i].publish(msg)
 
 # ----------------------------------------
 def main():

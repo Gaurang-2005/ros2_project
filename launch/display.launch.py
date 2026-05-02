@@ -10,15 +10,13 @@ def generate_launch_description():
 
     urdf_path = os.path.join(pkg_path, 'urdf', 'robot.urdf')
     rviz_config_path = os.path.join(pkg_path, 'config', 'pick_and_drop.rviz')
-    controller_yaml = os.path.join(pkg_path, 'config', 'controllers.yaml')
+    controller_yaml = os.path.join(pkg_path, 'config', 'rvizcontrollers.yaml')
 
-    # Load URDF
     with open(urdf_path, 'r') as f:
         robot_desc = f.read()
 
     return LaunchDescription([
 
-        # 🚨 ros2_control replaces joint_state_publisher_gui
         Node(
             package='controller_manager',
             executable='ros2_control_node',
@@ -29,7 +27,6 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # TF publisher
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
@@ -37,7 +34,6 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # Spawn controllers
         Node(
             package='controller_manager',
             executable='spawner',
@@ -52,7 +48,6 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # RViz (delayed so TF is ready)
         TimerAction(
             period=3.0,
             actions=[
@@ -63,5 +58,11 @@ def generate_launch_description():
                     output='screen'
                 )
             ]
-        )
+        ),
+        Node(
+            package='rqt_gui',
+            executable='rqt_gui',
+            arguments=['--standalone', 'rqt_joint_trajectory_controller'],
+            output='screen'
+        ),    
     ])
