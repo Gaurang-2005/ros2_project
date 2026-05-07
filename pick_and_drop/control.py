@@ -4,7 +4,6 @@ from std_msgs.msg import Float64MultiArray, Float64
 from sensor_msgs.msg import JointState
 import math
 
-
 class AngleToTorque(Node):
     def __init__(self):
         super().__init__('angle_to_torque')
@@ -22,12 +21,12 @@ class AngleToTorque(Node):
         self.target = None
 
         # gains (start conservative)
-        self.kp = [500, 16000, 11000, 7000, 4000, 80, 80]
+        self.kp = [5000, 16000, 11000, 7000, 4000, 80, 80]
 
         # critical damping
         self.kd = [
-            2.5 * math.sqrt(self.kp[0]),                                      # base
-            20 * math.sqrt(self.kp[1]),               # joint1
+            20 * math.sqrt(self.kp[0]),                                      # base
+            25 * math.sqrt(self.kp[1]),               # joint1
             17 * math.sqrt(self.kp[2]),               # joint2
             12 * math.sqrt(self.kp[3]),               # joint3
             9  * math.sqrt(self.kp[4]),               # joint4
@@ -64,11 +63,26 @@ class AngleToTorque(Node):
 
         # subscribers
         self.create_subscription(JointState, '/joint_states', self.joint_cb, 10)
-        self.create_subscription(Float64MultiArray, '/target_angles_deg', self.target_cb, 10)
+        self.create_subscription(
+            Float64MultiArray,
+            '/joint_angles',
+            self.angle_cb,
+            10
+        )
 
         self.timer = self.create_timer(0.01, self.control_loop)
 
         self.get_logger().info("Angle-to-torque node ready")
+        self.trajectory = None
+        self.trajectory_start_time = None
+        self.motion_start = None
+        self.motion_duration = 3.0
+
+        self.start_target = [0.0]*7
+        self.goal_target = [0.0]*7
+
+        self.last_debug_time = self.get_clock().now()
+        self.debug_interval = 1.0
 
     # ----------------------------------------
     def joint_cb(self, msg):
@@ -87,17 +101,21 @@ class AngleToTorque(Node):
         # self.get_logger().info(f"Current (deg): {deg_vals}")
 
     # ----------------------------------------
-    def target_cb(self, msg):
+    def angle_cb(self, msg):
 
-        if len(msg.data) != len(self.joint_names):
-            self.get_logger().warn("Wrong target size")
+        if self.target is None:
             return
 
-        # convert degrees → radians
-        self.target = [math.radians(x) for x in msg.data]
+        n = min(len(msg.data), len(self.joint_names))
 
-        # self.get_logger().info(f"Target (rad): {self.target}")
+        self.start_target = self.target.copy()
 
+        for i in range(n):
+            self.goal_target[i] = msg.data[i]
+
+        self.motion_start = self.get_clock().now()
+
+        self.get_logger().info("Received new trajectory target")
     # ----------------------------------------
     def control_loop(self):
 
@@ -106,96 +124,210 @@ class AngleToTorque(Node):
 
         dt = 0.01
 
+        # ----------------------------------------
+        # 🔥 CUSTOM TRAJECTORY INTERPOLATION
+        # ----------------------------------------
+
+        if self.motion_start is not None:
+
+            now = self.get_clock().now()
+
+            t = (
+                now - self.motion_start
+            ).nanoseconds * 1e-9
+
+            ratio = min(t / self.motion_duration, 1.0)
+
+            # cubic smoothstep interpolation
+            s = 3 * (ratio ** 2) - 2 * (ratio ** 3)
+
+            for i in range(len(self.joint_names)):
+
+                self.target[i] = (
+                    self.start_target[i]
+                    + s * (
+                        self.goal_target[i]
+                        - self.start_target[i]
+                    )
+                )
+
+            if ratio >= 1.0:
+                self.motion_start = None
+
+        # ----------------------------------------
+        # 🔄 TRAJECTORY SMOOTHING
+        # ----------------------------------------
+
         for i in range(len(self.joint_names)):
 
             error = self.target[i] - self.trajectory_target[i]
 
-            # desired velocity (bounded)
-            desired_vel = max(min(error / dt, self.max_vel[i]), -self.max_vel[i])
+            desired_vel = max(
+                min(error / dt, self.max_vel[i]),
+                -self.max_vel[i]
+            )
 
-            # smooth acceleration toward desired velocity
             vel_diff = desired_vel - self.trajectory_vel[i]
+
             max_step = self.max_acc[i] * dt
 
             if abs(vel_diff) > max_step:
-                self.trajectory_vel[i] += math.copysign(max_step, vel_diff)
+                self.trajectory_vel[i] += math.copysign(
+                    max_step,
+                    vel_diff
+                )
             else:
                 self.trajectory_vel[i] = desired_vel
 
-            # update position
-            self.trajectory_target[i] += self.trajectory_vel[i] * dt
-        
-        torques = [0.0]*len(self.joint_names)
-        error_deg = [round(math.degrees(self.target[i] - self.pos[i]), 2) for i in range(len(self.pos))]
-        self.get_logger().info(f"Error (deg): {error_deg}")
+            self.trajectory_target[i] += (
+                self.trajectory_vel[i] * dt
+            )
+
+        # ----------------------------------------
+        # 🔧 PID TORQUE CONTROL
+        # ----------------------------------------
+
+        torques = [0.0] * len(self.joint_names)
+
+        # ---- arm joints ----
+
         for i in range(len(self.joint_names) - 2):
-            
-            error = self.trajectory_target[i] - self.pos[i]
+
+            error = (
+                self.trajectory_target[i]
+                - self.pos[i]
+            )
+
             if abs(error) > math.radians(self.step):
-                error = math.copysign(math.radians(self.step), error)
+                error = math.copysign(
+                    math.radians(self.step),
+                    error
+                )
 
             self.integral_error[i] += error * dt
+
             self.integral_error[i] = max(
-                min(self.integral_error[i], self.integral_limit[i]),
+                min(
+                    self.integral_error[i],
+                    self.integral_limit[i]
+                ),
                 -self.integral_limit[i]
             )
+
             tau = (
-                self.kp[i]*error
-                + self.ki[i]*self.integral_error[i]
+                self.kp[i] * error
+                + self.ki[i] * self.integral_error[i]
                 - self.kd[i] * self.vel[i]
             )
 
-
-            torques[i] = float(max(min(tau, self.max_torque[i]), -self.max_torque[i]))
-            # compute errors for both fingers (mirror control)
-            grip = self.target[5]
-
-            error1 = grip - self.pos[5]
-            error2 = -grip - self.pos[6]
-
-            finger_step = 1
-
-            # limit step (same as before)
-            if abs(error1) > math.radians(finger_step):
-                error1 = math.copysign(math.radians(finger_step), error1)
-            if abs(error2) > math.radians(finger_step):
-                error2 = math.copysign(math.radians(finger_step), error2)
-
-            # 🔥 shared velocity for symmetry
-            avg_vel = (self.vel[5] + self.vel[6]) / 2.0
-
-            # ---- finger 1 ----
-            self.integral_error[5] += error1 * dt
-            self.integral_error[5] = max(
-                min(self.integral_error[5], self.integral_limit[5]),
-                -self.integral_limit[5]
+            torques[i] = float(
+                max(
+                    min(tau, self.max_torque[i]),
+                    -self.max_torque[i]
+                )
             )
 
-            tau1 = (
-                self.kp[5] * error1
-                + self.ki[5] * self.integral_error[5]
-                - self.kd[5] * avg_vel
+        # ----------------------------------------
+        # 🤏 GRIPPER CONTROL
+        # ----------------------------------------
+
+        grip = self.target[5]
+
+        error1 = grip - self.pos[5]
+        error2 = -grip - self.pos[6]
+
+        finger_step = 1
+
+        if abs(error1) > math.radians(finger_step):
+            error1 = math.copysign(
+                math.radians(finger_step),
+                error1
             )
 
-            # ---- finger 2 ----
-            self.integral_error[6] += error2 * dt
-            self.integral_error[6] = max(
-                min(self.integral_error[6], self.integral_limit[6]),
-                -self.integral_limit[6]
+        if abs(error2) > math.radians(finger_step):
+            error2 = math.copysign(
+                math.radians(finger_step),
+                error2
             )
 
-            tau2 = (
-                self.kp[6] * error2
-                + self.ki[6] * self.integral_error[6]
-                - self.kd[6] * avg_vel
-            )
+        avg_vel = (
+            self.vel[5] + self.vel[6]
+        ) / 2.0
 
-            # apply torques
-            torques[5] = float(max(min(tau1, self.max_torque[5]), -self.max_torque[5]))
-            torques[6] = float(max(min(tau2, self.max_torque[6]), -self.max_torque[6]))
+        # finger 1
+
+        self.integral_error[5] += error1 * dt
+
+        self.integral_error[5] = max(
+            min(
+                self.integral_error[5],
+                self.integral_limit[5]
+            ),
+            -self.integral_limit[5]
+        )
+
+        tau1 = (
+            self.kp[5] * error1
+            + self.ki[5] * self.integral_error[5]
+            - self.kd[5] * avg_vel
+        )
+
+        # finger 2
+
+        self.integral_error[6] += error2 * dt
+
+        self.integral_error[6] = max(
+            min(
+                self.integral_error[6],
+                self.integral_limit[6]
+            ),
+            -self.integral_limit[6]
+        )
+
+        tau2 = (
+            self.kp[6] * error2
+            + self.ki[6] * self.integral_error[6]
+            - self.kd[6] * avg_vel
+        )
+
+        torques[5] = float(
+            max(
+                min(tau1, self.max_torque[5]),
+                -self.max_torque[5]
+            )
+        )
+
+        torques[6] = float(
+            max(
+                min(tau2, self.max_torque[6]),
+                -self.max_torque[6]
+            )
+        )
+        # ----------------------------------------
+        # 🖨 DEBUG PRINT
+        # ----------------------------------------
+        error_deg = [
+            round(
+                math.degrees(
+                    self.trajectory_target[i]
+                    - self.pos[i]
+                ),
+                2
+            )
+            for i in range(len(self.pos))
+        ]
+
+        print(f"Error (deg): {error_deg}", flush=True)
+        # ----------------------------------------
+        # 📤 PUBLISH TORQUES
+        # ----------------------------------------
+
         for i in range(len(self.joint_names)):
+
             msg = Float64()
+
             msg.data = float(torques[i])
+
             self.pubs[i].publish(msg)
 
 # ----------------------------------------
