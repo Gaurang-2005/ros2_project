@@ -2,19 +2,30 @@ import math
 import os
 import subprocess
 import tempfile
-import time
 
 import numpy as np
 import rclpy
+
 from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
-from std_msgs.msg import Float64MultiArray
+
+from geometry_msgs.msg import Point
 from geometry_msgs.msg import PoseArray
 
+from sensor_msgs.msg import JointState
+
+from std_msgs.msg import Bool
+from std_msgs.msg import Float64MultiArray
+
+
 class PickAndPlace(Node):
+
     def __init__(self):
+
         super().__init__('pick_and_place')
+
+        # =====================================================
+        # JOINT STATE STORAGE
+        # =====================================================
 
         self.arm_joint_names = [
             'base_joint',
@@ -23,149 +34,114 @@ class PickAndPlace(Node):
             'joint3',
             'joint4',
         ]
-        self.full_joint_names = [
-            'base_joint',
-            'joint1',
-            'joint2',
-            'joint3',
-            'joint4',
-            'finger1_joint',
-            'finger2_joint',
-        ]
-
-        self.joint_limits = np.array([
-            [-math.pi, math.pi],
-            [-1.57, 1.57],
-            [-1.57, 1.57],
-            [-1.57, 1.57],
-            [-1.57, 1.57],
-        ], dtype=float)
 
         self.q = np.zeros(5, dtype=float)
-        self.fingers = np.zeros(2, dtype=float)
+
         self.have_joint_state = False
 
-        # ---------------- MANUAL TUNING SECTION ----------------
-        # Change these ROS parameters from the command line while testing.
-        # All positions are end-effector XYZ targets in the world frame.
+        # =====================================================
+        # PARAMETERS
+        # =====================================================
+
         self.declare_parameter('spawn_box', True)
+
         self.declare_parameter('box_name', 'pick_box')
+
         self.declare_parameter('box_size', 0.45)
+
         self.declare_parameter('box_x', 0.0)
-        self.declare_parameter('box_y', 6.1)
+        self.declare_parameter('box_y', 4.0)
         self.declare_parameter('box_z', 0.225)
 
-        self.declare_parameter('home_base_deg', 0.0)
-        self.declare_parameter('home_joint1_deg', -50.0)
-        self.declare_parameter('home_joint2_deg', 35.0)
-        self.declare_parameter('home_joint3_deg', -75.0)
-        self.declare_parameter('home_joint4_deg', -90.0)
-
-        self.declare_parameter('pre_pick_x', 0.0)
-        self.declare_parameter('pre_pick_y', 6.1)
-        self.declare_parameter('pre_pick_z', 2.0)
-        self.declare_parameter('pick_x', 0.0)
-        self.declare_parameter('pick_y', 6.1)
-        self.declare_parameter('pick_z', 1.0)
-        self.declare_parameter('lift_x', 0.0)
-        self.declare_parameter('lift_y', 6.1)
-        self.declare_parameter('lift_z', 3.0)
-        self.declare_parameter('pre_place_x', -6.1)
-        self.declare_parameter('pre_place_y', 0.0)
-        self.declare_parameter('pre_place_z', 3.0)
-        self.declare_parameter('place_x', -6.1)
-        self.declare_parameter('place_y', 0.0)
-        self.declare_parameter('place_z', 1.0)
-        self.declare_parameter('retreat_x', -6.1)
-        self.declare_parameter('retreat_y', 0.0)
-        self.declare_parameter('retreat_z', 3.0)
+        self.declare_parameter('world_name', 'empty')
 
         self.declare_parameter('open_finger_deg', 0.0)
-        self.declare_parameter('closed_finger_deg', 40.0)
-        # -------------------------------------------------------
 
-        self.declare_parameter('world_name', 'empty')
-        self.declare_parameter('spawn_retry_period_sec', 2.0)
-        self.declare_parameter('spawn_max_attempts', 20)
-        self.declare_parameter('move_timeout_sec', 0.0)
-        self.declare_parameter('position_tolerance', 0.15)
-        self.declare_parameter('wrist_tolerance_deg', 8.0)
-        self.declare_parameter('joint_tolerance_deg', 8.0)
-        self.declare_parameter('dwell_sec', 1.0)
+        self.declare_parameter('closed_finger_deg', 40.0)
+
         self.declare_parameter('auto_start_delay_sec', 3.0)
 
-        self.box_name = self.get_parameter('box_name').value
-        self.box_size = float(self.get_parameter('box_size').value)
-        self.spawn_box_enabled = bool(self.get_parameter('spawn_box').value)
-        self.box_position = self.param_vec('box')
-        self.pre_pick_position = self.param_vec('pre_pick')
-        self.pick_position = self.param_vec('pick')
-        self.lift_position = self.param_vec('lift')
-        self.pre_place_position = self.param_vec('pre_place')
-        self.place_position = self.param_vec('place')
-        self.retreat_position = self.param_vec('retreat')
-        self.open_finger = math.radians(float(self.get_parameter('open_finger_deg').value))
-        self.closed_finger = math.radians(float(self.get_parameter('closed_finger_deg').value))
-        self.world_name = self.get_parameter('world_name').value
-        self.spawn_retry_period_sec = float(self.get_parameter('spawn_retry_period_sec').value)
-        self.spawn_max_attempts = int(self.get_parameter('spawn_max_attempts').value)
-        self.move_timeout = float(self.get_parameter('move_timeout_sec').value)
-        self.position_tolerance = float(self.get_parameter('position_tolerance').value)
-        self.wrist_tolerance = math.radians(
-            float(self.get_parameter('wrist_tolerance_deg').value)
+        # =====================================================
+        # PARAM VALUES
+        # =====================================================
+
+        self.box_name = self.get_parameter(
+            'box_name'
+        ).value
+
+        self.box_size = float(
+            self.get_parameter('box_size').value
         )
-        self.joint_tolerance = math.radians(
-            float(self.get_parameter('joint_tolerance_deg').value)
+
+        self.spawn_box_enabled = bool(
+            self.get_parameter('spawn_box').value
         )
-        self.dwell_sec = float(self.get_parameter('dwell_sec').value)
-        self.auto_start_delay_sec = float(self.get_parameter('auto_start_delay_sec').value)
 
-        self.home_q = np.radians(np.array([
-            self.get_parameter('home_base_deg').value,
-            self.get_parameter('home_joint1_deg').value,
-            self.get_parameter('home_joint2_deg').value,
-            self.get_parameter('home_joint3_deg').value,
-            self.get_parameter('home_joint4_deg').value,
-        ], dtype=float))
-        self.ik_seed_templates = np.radians(np.array([
-            [-50.0, 35.0, -75.0, -90.0],
-            [-58.0, -31.0, -72.0, -19.0],
-            [-65.0, -22.0, -49.0, -44.0],
-            [-30.0, -80.0, -35.0, -35.0],
-            [-70.0, 55.0, -75.0, -90.0],
-        ], dtype=float))
-        self.wrist_down_pitch = math.radians(180.0)
-        self.orientation_weight = 3.0
-        self.damping = 0.2
-        self.max_dq_step = 0.04
-        self.ik_iterations = 120
+        self.world_name = self.get_parameter(
+            'world_name'
+        ).value
 
-        self.target_pub = self.create_publisher(Float64MultiArray, '/target_angles_deg', 10)
-        self.autonomous_pub = self.create_publisher(Bool, '/autonomous_mode', 10)
-        self.create_subscription(JointState, '/joint_states', self.joint_state_cb, 10)
+        self.auto_start_delay_sec = float(
+            self.get_parameter(
+                'auto_start_delay_sec'
+            ).value
+        )
 
-        self.started = False
-        self.finished = False
-        self.box_spawned = False
-        self.spawn_attempts = 0
-        self.last_spawn_attempt_time = None
-        self.sequence = []
-        self.step_index = -1
-        self.active_step = None
-        self.step_start_time = None
-        self.last_progress_log = 0.0
-        self.settle_until = None
-        self.start_time = self.get_clock().now()
-        self.timer = self.create_timer(0.1, self.timer_cb)
-
-        self.get_logger().info(
-            'Pick-and-place node ready. Box at %s. Pick=%s Place=%s.'
-            % (
-                self._fmt_vec(self.box_position),
-                self._fmt_vec(self.pick_position),
-                self._fmt_vec(self.place_position),
+        self.open_finger = math.radians(
+            float(
+                self.get_parameter(
+                    'open_finger_deg'
+                ).value
             )
         )
+
+        self.closed_finger = math.radians(
+            float(
+                self.get_parameter(
+                    'closed_finger_deg'
+                ).value
+            )
+        )
+
+        self.box_position = np.array([
+            self.get_parameter('box_x').value,
+            self.get_parameter('box_y').value,
+            self.get_parameter('box_z').value
+        ], dtype=float)
+
+        # =====================================================
+        # PUBLISHERS
+        # =====================================================
+
+        self.ik_target_pub = self.create_publisher(
+            Point,
+            '/ik_target',
+            10
+        )
+
+        self.gripper_pub = self.create_publisher(
+            Float64MultiArray,
+            '/gripper_angles',
+            10
+        )
+
+        self.autonomous_pub = self.create_publisher(
+            Bool,
+            '/autonomous_mode',
+            10
+        )
+
+        # =====================================================
+        # SUBSCRIBERS
+        # =====================================================
+
+        self.create_subscription(
+            JointState,
+            '/joint_states',
+            self.joint_state_cb,
+            10
+        )
+
         self.create_subscription(
             PoseArray,
             f'/world/{self.world_name}/pose/info',
@@ -173,14 +149,93 @@ class PickAndPlace(Node):
             10
         )
 
-        self.box_pose_valid = False    
+        # =====================================================
+        # STATE
+        # =====================================================
+
+        self.box_pose_valid = False
+
+        self.started = False
+
+        self.finished = False
+
+        self.sequence = []
+
+        self.step_index = 0
+
+        self.current_target = None
+
+        self.current_finger = None
+
+        self.position_tolerance = 0.25
+
+        self.required_stable_cycles = 15
+
+        self.stable_counter = 0
+
+        self.start_time = self.get_clock().now()
+
+        # =====================================================
+        # BOX SPAWNING
+        # =====================================================
+
+        self.box_spawned = False
+
+        self.spawn_attempts = 0
+
+        self.spawn_retry_period_sec = 2.0
+
+        self.spawn_max_attempts = 20
+
+        self.last_spawn_attempt_time = None
+
+        # =====================================================
+        # TIMER
+        # =====================================================
+
+        self.timer = self.create_timer(
+            0.1,
+            self.timer_cb
+        )
+
+        self.get_logger().info(
+            'Verified pick and place node started'
+        )
+
+    # =========================================================
+    # JOINT STATES
+    # =========================================================
+
+    def joint_state_cb(self, msg):
+
+        name_to_index = {
+            name: i
+            for i, name in enumerate(msg.name)
+        }
+
+        for i, joint in enumerate(self.arm_joint_names):
+
+            if joint in name_to_index:
+
+                self.q[i] = msg.position[
+                    name_to_index[joint]
+                ]
+
+        self.have_joint_state = True
+
+    # =========================================================
+    # BOX TRACKING
+    # =========================================================
 
     def pose_cb(self, msg):
-        if not hasattr(msg, "names"):
+
+        if not hasattr(msg, 'names'):
             return
 
         for i, name in enumerate(msg.names):
+
             if name == self.box_name:
+
                 pose = msg.poses[i]
 
                 self.box_position = np.array([
@@ -190,133 +245,236 @@ class PickAndPlace(Node):
                 ], dtype=float)
 
                 self.box_pose_valid = True
+
                 return
 
-
-    def joint_state_cb(self, msg):
-        name_to_index = {name: index for index, name in enumerate(msg.name)}
-
-        for i, joint_name in enumerate(self.arm_joint_names):
-            if joint_name in name_to_index:
-                self.q[i] = msg.position[name_to_index[joint_name]]
-
-        for i, joint_name in enumerate(self.full_joint_names[5:]):
-            if joint_name in name_to_index:
-                self.fingers[i] = msg.position[name_to_index[joint_name]]
-
-        self.have_joint_state = True
-
-    def param_vec(self, prefix):
-        return np.array([
-            self.get_parameter(f'{prefix}_x').value,
-            self.get_parameter(f'{prefix}_y').value,
-            self.get_parameter(f'{prefix}_z').value,
-        ], dtype=float)
+    # =========================================================
+    # TIMER
+    # =========================================================
 
     def timer_cb(self):
+
         if self.finished:
             return
 
-        if self.started:
-            self.publish_autonomous_mode(True)
-            self.process_active_step()
-            return
+        # =========================================
+        # SPAWN BOX FIRST
+        # =========================================
 
-        if self.spawn_box_enabled and not self.box_spawned:
+        if (
+            self.spawn_box_enabled
+            and not self.box_spawned
+        ):
+
             self.try_spawn_box()
+
             return
 
-        elapsed = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
-        if elapsed < self.auto_start_delay_sec or not self.have_joint_state:
+        # =========================================
+        # STARTUP DELAY
+        # =========================================
+
+        elapsed = (
+            self.get_clock().now()
+            - self.start_time
+        ).nanoseconds / 1e9
+
+        if elapsed < self.auto_start_delay_sec:
             return
 
-        self.started = True
-        self.publish_autonomous_mode(True)
-        self.prepare_sequence()
-        self.get_logger().info('Starting automatic pick-and-place sequence.')
-        self.advance_step()
+        if not self.have_joint_state:
+            return
 
-    def publish_autonomous_mode(self, active):
-        msg = Bool()
-        msg.data = bool(active)
-        self.autonomous_pub.publish(msg)
+        # =========================================
+        # START SEQUENCE
+        # =========================================
+
+        if not self.started:
+
+            self.started = True
+
+            self.publish_autonomous_mode(True)
+
+            self.prepare_sequence()
+
+            self.get_logger().info(
+                'Starting pick and place sequence'
+            )
+
+            self.execute_current_step()
+
+            return
+
+        # =========================================
+        # CONTINUOUS TARGET PUBLISHING
+        # =========================================
+
+        if self.current_target is not None:
+
+            self.publish_ik_target(
+                self.current_target
+            )
+
+        if self.current_finger is not None:
+
+            self.publish_gripper(
+                self.current_finger
+            )
+
+        # =========================================
+        # VERIFY CURRENT STEP
+        # =========================================
+
+        if self.verify_current_step():
+
+            self.stable_counter += 1
+
+        else:
+
+            self.stable_counter = 0
+
+        # =========================================
+        # STEP COMPLETED
+        # =========================================
+
+        if (
+            self.stable_counter
+            >= self.required_stable_cycles
+        ):
+
+            self.get_logger().info(
+                'Step verified'
+            )
+
+            self.stable_counter = 0
+
+            self.step_index += 1
+
+            # =====================================
+            # FINISHED
+            # =====================================
+
+            if self.step_index >= len(self.sequence):
+
+                self.finished = True
+
+                self.publish_autonomous_mode(False)
+
+                self.get_logger().info(
+                    'Pick and place finished'
+                )
+
+                return
+
+            self.execute_current_step()
+
+    # =========================================================
+    # SPAWN BOX
+    # =========================================================
 
     def try_spawn_box(self):
+
+        import time
+
         now = time.monotonic()
+
         if (
-            self.last_spawn_attempt_time is not None
-            and now - self.last_spawn_attempt_time < self.spawn_retry_period_sec
+            self.last_spawn_attempt_time
+            is not None
+            and now
+            - self.last_spawn_attempt_time
+            < self.spawn_retry_period_sec
         ):
             return
 
-        if self.spawn_attempts >= self.spawn_max_attempts:
+        if (
+            self.spawn_attempts
+            >= self.spawn_max_attempts
+        ):
+
             self.get_logger().error(
-                'Box did not spawn after %d attempts. Check that Gazebo is running and world_name=%s.'
-                % (self.spawn_attempts, self.world_name)
+                'Failed to spawn box'
             )
+
             self.finished = True
+
             return
 
         self.last_spawn_attempt_time = now
+
         self.spawn_attempts += 1
+
         if self.spawn_box():
+
             self.box_spawned = True
-            self.start_time = self.get_clock().now()
+
+            self.get_logger().info(
+                'Box spawned successfully'
+            )
 
     def spawn_box(self):
+
         box_x = float(self.box_position[0])
+
         box_y = float(self.box_position[1])
+
         box_z = float(self.box_position[2])
 
-        sdf = f"""<?xml version="1.0" ?>
+        sdf = f"""
+<?xml version="1.0" ?>
 <sdf version="1.9">
+
   <model name="{self.box_name}">
-    <pose>0 0 0 0 0 0</pose>
+
     <link name="link">
+
       <inertial>
         <mass>0.2</mass>
-        <inertia>
-          <ixx>0.003375</ixx>
-          <iyy>0.003375</iyy>
-          <izz>0.003375</izz>
-          <ixy>0</ixy>
-          <ixz>0</ixz>
-          <iyz>0</iyz>
-        </inertia>
       </inertial>
+
       <collision name="collision">
+
         <geometry>
           <box>
-            <size>{self.box_size} {self.box_size} {self.box_size}</size>
+            <size>
+              {self.box_size}
+              {self.box_size}
+              {self.box_size}
+            </size>
           </box>
         </geometry>
-        <surface>
-          <friction>
-            <ode>
-              <mu>2.0</mu>
-              <mu2>2.0</mu2>
-            </ode>
-          </friction>
-        </surface>
+
       </collision>
+
       <visual name="visual">
+
         <geometry>
           <box>
-            <size>{self.box_size} {self.box_size} {self.box_size}</size>
+            <size>
+              {self.box_size}
+              {self.box_size}
+              {self.box_size}
+            </size>
           </box>
         </geometry>
-        <material>
-          <ambient>0.8 0.15 0.05 1</ambient>
-          <diffuse>0.9 0.2 0.05 1</diffuse>
-        </material>
+
       </visual>
+
     </link>
+
   </model>
+
 </sdf>
 """
-        sdf_path = os.path.join(tempfile.gettempdir(), f'{self.box_name}.sdf')
-        with open(sdf_path, 'w', encoding='utf-8') as file:
-            file.write(sdf)
+
+        sdf_path = os.path.join(
+            tempfile.gettempdir(),
+            f'{self.box_name}.sdf'
+        )
+
+        with open(sdf_path, 'w') as f:
+
+            f.write(sdf)
 
         cmd = [
             'ros2',
@@ -335,402 +493,365 @@ class PickAndPlace(Node):
             str(box_y),
             '-z',
             str(box_z),
-            '-allow_renaming',
-            'true',
         ]
+
         try:
-            self.get_logger().info(
-                'Spawning box attempt %d/%d in world %s at %s'
-                % (
-                    self.spawn_attempts,
-                    self.spawn_max_attempts,
-                    self.world_name,
-                    self._fmt_vec(self.box_position),
-                )
-            )
+
             result = subprocess.run(
                 cmd,
                 check=False,
                 text=True,
                 capture_output=True,
-                timeout=10.0,
+                timeout=10.0
             )
+
             if result.returncode == 0:
+
                 self.get_logger().info(
-                    'Spawned %s in world %s at [%.3f, %.3f, %.3f]'
-                    % (self.box_name, self.world_name, box_x, box_y, box_z)
+                    f'Spawned box at '
+                    f'[{box_x:.2f}, '
+                    f'{box_y:.2f}, '
+                    f'{box_z:.2f}]'
                 )
+
                 return True
+
             else:
+
                 self.get_logger().error(
-                    'Box spawn failed with return code %d: %s %s'
-                    % (result.returncode, result.stdout.strip(), result.stderr.strip())
+                    result.stderr
                 )
-        except OSError as exc:
-            self.get_logger().warn(f'Could not spawn box with ros_gz_sim create: {exc}')
-        except subprocess.TimeoutExpired:
-            self.get_logger().error('Box spawn command timed out before Gazebo responded.')
+
+        except Exception as e:
+
+            self.get_logger().error(str(e))
 
         return False
 
+    # =========================================================
+    # SEQUENCE
+    # =========================================================
+
     def prepare_sequence(self):
+
+        box = self.box_position.copy()
+
+        place = np.array([
+            -4.0,
+            2.0,
+            0.5
+        ])
+
         self.sequence = [
-            {'name': 'home_open', 'kind': 'joints', 'q': self.home_q, 'position': self.FK(self.home_q), 'finger': self.open_finger},
-            {'name': 'pre_pick_open', 'kind': 'pose', 'position': self.pre_pick_position, 'finger': self.open_finger},
-            {'name': 'pick_open', 'kind': 'pose', 'position': self.pick_position, 'finger': self.open_finger},
-            {'name': 'pick_closed', 'kind': 'pose', 'position': self.pick_position, 'finger': self.closed_finger, 'settle': True},
-            {'name': 'lift_closed', 'kind': 'pose', 'position': self.lift_position, 'finger': self.closed_finger},
-            {'name': 'pre_place_closed', 'kind': 'pose', 'position': self.pre_place_position, 'finger': self.closed_finger},
-            {'name': 'place_closed', 'kind': 'pose', 'position': self.place_position, 'finger': self.closed_finger},
-            {'name': 'place_open', 'kind': 'pose', 'position': self.place_position, 'finger': self.open_finger, 'settle': True},
-            {'name': 'retreat_open', 'kind': 'pose', 'position': self.retreat_position, 'finger': self.open_finger},
-            {'name': 'home_open', 'kind': 'joints', 'q': self.home_q, 'position': self.FK(self.home_q), 'finger': self.open_finger},
+
+            {
+                'name': 'home',
+                'position': np.array([
+                    0.0,
+                    0.0,
+                    7.5
+                ]),
+                'finger': self.open_finger
+            },
+
+            {
+                'name': 'pre_pick',
+                'position': box + np.array([
+                    0.0,
+                    0.0,
+                    2.0
+                ]),
+                'finger': self.open_finger
+            },
+
+            {
+                'name': 'pick',
+                'position': box + np.array([
+                    0.0,
+                    0.0,
+                    0.4
+                ]),
+                'finger': self.open_finger
+            },
+
+            {
+                'name': 'close',
+                'position': box + np.array([
+                    0.0,
+                    0.0,
+                    0.4
+                ]),
+                'finger': self.closed_finger
+            },
+
+            {
+                'name': 'lift',
+                'position': box + np.array([
+                    0.0,
+                    0.0,
+                    2.0
+                ]),
+                'finger': self.closed_finger
+            },
+
+            {
+                'name': 'pre_place',
+                'position': place + np.array([
+                    0.0,
+                    0.0,
+                    2.0
+                ]),
+                'finger': self.closed_finger
+            },
+
+            {
+                'name': 'place',
+                'position': place + np.array([
+                    0.0,
+                    0.0,
+                    0.4
+                ]),
+                'finger': self.closed_finger
+            },
+
+            {
+                'name': 'open',
+                'position': place + np.array([
+                    0.0,
+                    0.0,
+                    0.4
+                ]),
+                'finger': self.open_finger
+            },
+
+            {
+                'name': 'retreat',
+                'position': place + np.array([
+                    0.0,
+                    0.0,
+                    2.0
+                ]),
+                'finger': self.open_finger
+            },
+
+            {
+                'name': 'home',
+                'position': np.array([
+                    0.0,
+                    0.0,
+                    7.5
+                ]),
+                'finger': self.open_finger
+            },
         ]
 
-    def advance_step(self):
-        self.step_index += 1
-        self.active_step = None
-        self.settle_until = None
+    # =========================================================
+    # EXECUTE STEP
+    # =========================================================
 
-        if self.step_index >= len(self.sequence):
-            self.finished = True
-            self.publish_autonomous_mode(False)
-            self.get_logger().info('Pick-and-place sequence complete. Teleop IK may resume.')
-            return
+    def execute_current_step(self):
 
         step = self.sequence[self.step_index]
 
-        # -------- SAFE APPROACH FIX --------
+        name = step['name']
 
-        if not hasattr(self, "locked_pick_position"):
-            self.locked_pick_position = None
-
-        step_name = step['name']
-
-        if step['kind'] == 'pose':
-
-            # ---- STEP 1: GO ABOVE BOX (safe height) ----
-            if step_name == 'pre_pick_open':
-                if self.box_pose_valid:
-                    position = self.box_position + np.array([0.0, 0.0, 2.0])
-                else:
-                    position = step['position']
-
-            # ---- STEP 2: ALIGN XY ABOVE BOX ----
-            elif step_name == 'pick_open':
-                if self.box_pose_valid:
-                    # stay slightly above before descending
-                    position = self.box_position + np.array([0.0, 0.0, 0.3])
-
-                    # lock XY position here
-                    self.locked_pick_position = self.box_position.copy()
-                else:
-                    position = step['position']
-
-            # ---- STEP 3: MOVE STRAIGHT DOWN ----
-            elif step_name == 'pick_closed':
-                if self.locked_pick_position is not None:
-                    position = self.locked_pick_position.copy()
-                else:
-                    position = step['position']
-
-            # ---- STEP 4: LIFT STRAIGHT UP ----
-            elif step_name == 'lift_closed':
-                if self.locked_pick_position is not None:
-                    position = self.locked_pick_position + np.array([0.0, 0.0, 2.0])
-                else:
-                    position = step['position']
-
-            # ---- OTHER STEPS ----
-            else:
-                position = step['position']
-
-        else:
-            position = step['position']
+        position = step['position']
 
         finger = step['finger']
 
-        # -------- IK --------
-        if step['kind'] == 'pose':
-            q_seed = self.q.copy() if self.have_joint_state else self.home_q.copy()
-            arm_angles = self.computeIK(q_seed, position)
-        else:
-            arm_angles = step['q']
+        self.current_target = position.copy()
 
-        # -------- LOGGING / VALIDATION --------
-        ik_error = float(np.linalg.norm(position - self.FK(arm_angles)))
-        ik_wrist_error = abs(self.wrap_angle(self.wrist_down_pitch - self.wrist_pitch(arm_angles)))
+        self.current_finger = finger
 
-        if ik_error > self.position_tolerance:
-            self.get_logger().warn(
-                '%s IK is %.3f m from requested target %s. The target may be unreachable with wrist-down and joint limits.'
-                % (step['name'], ik_error, self._fmt_vec(position))
-            )
+        self.publish_ik_target(
+            self.current_target
+        )
 
-        # -------- TARGET --------
-        target = np.concatenate((arm_angles, np.array([finger, finger])))
-
-        self.active_step = {
-            'name': step['name'],
-            'target': target,
-            'arm_angles': arm_angles,
-            'position': position,
-            'finger': finger,
-            'settle': bool(step.get('settle', False)),
-        }
-
-        self.step_start_time = time.monotonic()
-        self.last_progress_log = 0.0
+        self.publish_gripper(
+            self.current_finger
+        )
 
         self.get_logger().info(
-            '%s target position=%s joints=%s ik_error=%.3f wrist_error=%.1f deg finger=%.1f deg'
-            % (
-                step['name'],
-                self._fmt_vec(position),
-                self._fmt_angles_deg(arm_angles),
-                ik_error,
-                math.degrees(ik_wrist_error),
-                math.degrees(finger),
-            )
+            f'START STEP: {name} | '
+            f'Position: '
+            f'[{position[0]:.2f}, '
+            f'{position[1]:.2f}, '
+            f'{position[2]:.2f}]'
         )
 
-    def process_active_step(self):
-        if self.active_step is None:
-            return
+    # =========================================================
+    # VERIFY STEP
+    # =========================================================
 
-        self.publish_target(self.active_step['target'])
+    def verify_current_step(self):
 
-        if self.settle_until is not None:
-            if time.monotonic() >= self.settle_until:
-                self.advance_step()
-            return
+        if self.current_target is None:
 
-        name = self.active_step['name']
-        arm_angles = self.active_step['arm_angles']
-        target_position = self.active_step['position']
-        finger_angle = self.active_step['finger']
+            return False
 
-        arm_error = float(np.max(np.abs(arm_angles - self.q)))
-        position_error = float(np.linalg.norm(target_position - self.FK(self.q)))
-        wrist_error = abs(self.wrap_angle(self.wrist_down_pitch - self.wrist_pitch(self.q)))
-        finger_error = float(
-            np.max(np.abs(np.array([finger_angle, finger_angle]) - self.fingers))
+        ee = self.forward_kinematics(
+            self.q
         )
 
-        if (
-            position_error < self.position_tolerance
-            and wrist_error < self.wrist_tolerance
-            and finger_error < self.joint_tolerance
-        ):
-            self.get_logger().info(
-                '%s reached: ee_error=%.3f wrist_error=%.1f deg finger_error=%.1f deg'
-                % (
-                    name,
-                    position_error,
-                    math.degrees(wrist_error),
-                    math.degrees(finger_error),
-                )
-            )
-            settle_duration = self.dwell_sec if self.active_step['settle'] else 0.3
-            self.settle_until = time.monotonic() + settle_duration
-            return
+        error = np.linalg.norm(
+            self.current_target - ee
+        )
 
-        now = time.monotonic()
-        if now - self.last_progress_log > 1.0:
-            self.get_logger().info(
-                '%s waiting: ee_error=%.3f wrist_error=%.1f deg arm_error=%.1f deg finger_error=%.1f deg'
-                % (
-                    name,
-                    position_error,
-                    math.degrees(wrist_error),
-                    math.degrees(arm_error),
-                    math.degrees(finger_error),
-                )
-            )
-            self.last_progress_log = now
+        print(
+            f'Verification Error: '
+            f'{error:.4f}',
+            flush=True
+        )
 
-        if self.move_timeout > 0.0 and now - self.step_start_time > self.move_timeout:
-            self.get_logger().error(
-                '%s not reached: ee_error=%.3f wrist_error=%.1f deg arm_error=%.1f deg finger_error=%.1f deg. Holding this target.'
-                % (
-                    name,
-                    position_error,
-                    math.degrees(wrist_error),
-                    math.degrees(arm_error),
-                    math.degrees(finger_error),
-                )
-            )
-            self.step_start_time = now
+        return (
+            error
+            < self.position_tolerance
+        )
 
-    def publish_target(self, target_angles_rad):
+    # =========================================================
+    # IK TARGET
+    # =========================================================
+
+    def publish_ik_target(self, position):
+
+        msg = Point()
+
+        msg.x = float(position[0])
+
+        msg.y = float(position[1])
+
+        msg.z = float(position[2])
+
+        self.ik_target_pub.publish(msg)
+
+    # =========================================================
+    # GRIPPER
+    # =========================================================
+
+    def publish_gripper(self, finger_angle):
+
         msg = Float64MultiArray()
-        msg.data = [math.degrees(value) for value in target_angles_rad]
-        self.target_pub.publish(msg)
 
-    def computeIK(self, q_seed, target_position):
-        seeds = [q_seed.copy()]
-        base_guess = math.atan2(-target_position[0], target_position[1])
-        base_guess = max(min(base_guess, self.joint_limits[0, 1]), self.joint_limits[0, 0])
+        deg = math.degrees(finger_angle)
 
-        for template in self.ik_seed_templates:
-            seeds.append(np.concatenate((np.array([base_guess]), template)))
+        msg.data = [deg, deg]
 
-        best_q = None
-        best_cost = float('inf')
+        self.gripper_pub.publish(msg)
 
-        for seed in seeds:
-            q = self.solveIKFromSeed(seed, target_position)
-            position_error = float(np.linalg.norm(target_position - self.FK(q)))
-            pitch_error = abs(self.wrap_angle(self.wrist_down_pitch - self.wrist_pitch(q)))
-            limit_cost = float(np.sum(np.maximum(np.abs(q[1:]) - 1.45, 0.0)))
-            cost = position_error + 0.5 * pitch_error + 0.1 * limit_cost
+    # =========================================================
+    # AUTONOMOUS MODE
+    # =========================================================
 
-            if cost < best_cost:
-                best_cost = cost
-                best_q = q
+    def publish_autonomous_mode(self, active):
 
-        return best_q
+        msg = Bool()
 
-    def solveIKFromSeed(self, q_seed, target_position):
-        q = q_seed.copy()
+        msg.data = bool(active)
 
-        for _ in range(self.ik_iterations):
-            end_position = self.FK(q)
-            position_error = target_position - end_position
-            pitch_error = self.wrap_angle(self.wrist_down_pitch - self.wrist_pitch(q))
+        self.autonomous_pub.publish(msg)
 
-            error = np.concatenate((
-                position_error,
-                np.array([self.orientation_weight * pitch_error], dtype=float),
-            ))
+    # =========================================================
+    # FK
+    # =========================================================
 
-            jacobian = np.zeros((4, 5), dtype=float)
-            jacobian[:3, :] = self.computeJacobian(q)
-            jacobian[3, :] = self.orientation_weight * np.array(
-                [0.0, 1.0, 1.0, 1.0, 1.0],
-                dtype=float,
-            )
+    def forward_kinematics(self, q):
 
-            lhs = jacobian @ jacobian.T + (self.damping ** 2) * np.eye(4)
-            dq = jacobian.T @ np.linalg.solve(lhs, error)
-            dq = self.clamp_vector_norm(dq, self.max_dq_step)
+        T = np.eye(4)
 
-            q = q + dq
-            q = np.clip(q, self.joint_limits[:, 0], self.joint_limits[:, 1])
+        T = T @ self.trans(0, 0, 0.1)
 
-            if np.linalg.norm(position_error) < 0.02 and abs(pitch_error) < math.radians(3.0):
-                break
+        T = T @ self.rotz(q[0])
 
-        return q
+        T = T @ self.roty(q[1])
 
-    def FK(self, q):
-        transform = np.eye(4)
+        T = T @ self.trans(
+            0,
+            0,
+            1.67744
+        )
 
-        transform = transform @ self.translate(0.0, 0.0, 0.1) @ self.rot_z(q[0])
-        transform = transform @ self.translate(0.0, 0.0, 1.67744) @ self.rot_x(q[1])
-        transform = transform @ self.translate(0.0, -0.007232, 2.92735) @ self.rot_x(q[2])
-        transform = transform @ self.translate(0.0, 0.002234, 2.9244) @ self.rot_x(q[3])
-        transform = transform @ self.translate(0.0, 0.012929, 2.12653) @ self.rot_x(q[4])
+        T = T @ self.roty(q[2])
 
-        return transform[:3, 3].copy()
+        T = T @ self.trans(
+            0,
+            0,
+            2.92735
+        )
 
-    def computeJacobian(self, q):
-        end_position, origins, axes = self.fk_frames(q)
-        jacobian = np.zeros((3, 5), dtype=float)
+        T = T @ self.roty(q[3])
 
-        for i in range(5):
-            jacobian[:, i] = np.cross(axes[i], end_position - origins[i])
+        T = T @ self.trans(
+            0,
+            0,
+            2.9244
+        )
 
-        return jacobian
+        T = T @ self.roty(q[4])
 
-    def fk_frames(self, q):
-        transform = np.eye(4)
-        origins = []
-        axes = []
+        T = T @ self.trans(
+            0,
+            0,
+            2.12653
+        )
 
-        transform = transform @ self.translate(0.0, 0.0, 0.1)
-        origins.append(transform[:3, 3].copy())
-        axes.append((transform[:3, :3] @ np.array([0.0, 0.0, 1.0])).copy())
-        transform = transform @ self.rot_z(q[0])
+        return T[:3, 3]
 
-        transform = transform @ self.translate(0.0, 0.0, 1.67744)
-        origins.append(transform[:3, 3].copy())
-        axes.append((transform[:3, :3] @ np.array([1.0, 0.0, 0.0])).copy())
-        transform = transform @ self.rot_x(q[1])
+    # =========================================================
+    # HELPERS
+    # =========================================================
 
-        transform = transform @ self.translate(0.0, -0.007232, 2.92735)
-        origins.append(transform[:3, 3].copy())
-        axes.append((transform[:3, :3] @ np.array([1.0, 0.0, 0.0])).copy())
-        transform = transform @ self.rot_x(q[2])
+    def trans(self, x, y, z):
 
-        transform = transform @ self.translate(0.0, 0.002234, 2.9244)
-        origins.append(transform[:3, 3].copy())
-        axes.append((transform[:3, :3] @ np.array([1.0, 0.0, 0.0])).copy())
-        transform = transform @ self.rot_x(q[3])
+        T = np.eye(4)
 
-        transform = transform @ self.translate(0.0, 0.012929, 2.12653)
-        origins.append(transform[:3, 3].copy())
-        axes.append((transform[:3, :3] @ np.array([1.0, 0.0, 0.0])).copy())
-        transform = transform @ self.rot_x(q[4])
+        T[:3, 3] = [x, y, z]
 
-        return transform[:3, 3].copy(), origins, axes
+        return T
 
-    def wrist_pitch(self, q):
-        return float(q[1] + q[2] + q[3] + q[4])
+    def roty(self, a):
 
-    def rotate_about_z(self, position, angle):
-        c = math.cos(angle)
-        s = math.sin(angle)
+        c = math.cos(a)
+
+        s = math.sin(a)
+
         return np.array([
-            c * position[0] - s * position[1],
-            s * position[0] + c * position[1],
-            position[2],
-        ], dtype=float)
+            [c, 0, s, 0],
+            [0, 1, 0, 0],
+            [-s, 0, c, 0],
+            [0, 0, 0, 1]
+        ])
 
-    def translate(self, x, y, z):
-        transform = np.eye(4)
-        transform[:3, 3] = [x, y, z]
-        return transform
+    def rotz(self, a):
 
-    def rot_x(self, angle):
-        c = math.cos(angle)
-        s = math.sin(angle)
+        c = math.cos(a)
+
+        s = math.sin(a)
+
         return np.array([
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, c, -s, 0.0],
-            [0.0, s, c, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ], dtype=float)
+            [c, -s, 0, 0],
+            [s, c, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
 
-    def rot_z(self, angle):
-        c = math.cos(angle)
-        s = math.sin(angle)
-        return np.array([
-            [c, -s, 0.0, 0.0],
-            [s, c, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ], dtype=float)
 
-    def clamp_vector_norm(self, vector, max_norm):
-        norm = float(np.linalg.norm(vector))
-        if norm > max_norm and norm > 0.0:
-            return vector * (max_norm / norm)
-        return vector
-
-    def wrap_angle(self, angle):
-        return math.atan2(math.sin(angle), math.cos(angle))
-
-    def _fmt_vec(self, vector):
-        return '[%.3f, %.3f, %.3f]' % (vector[0], vector[1], vector[2])
-
-    def _fmt_angles_deg(self, vector):
-        return [round(math.degrees(value), 1) for value in vector]
-
+# =============================================================
+# MAIN
+# =============================================================
 
 def main():
+
     rclpy.init()
+
     node = PickAndPlace()
+
     rclpy.spin(node)
+
     node.destroy_node()
+
     rclpy.shutdown()
+
+
+if __name__ == '__main__':
+
+    main()

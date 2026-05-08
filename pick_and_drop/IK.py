@@ -15,6 +15,10 @@ class IKNode(Node):
 
         super().__init__('ik_node')
 
+        # =====================================================
+        # JOINT NAMES
+        # =====================================================
+
         self.joint_names = [
             'base_joint',
             'joint1',
@@ -23,33 +27,60 @@ class IKNode(Node):
             'joint4',
         ]
 
+        # =====================================================
+        # CURRENT JOINT STATE
+        # =====================================================
+
         self.q = np.zeros(5, dtype=float)
 
         self.have_joint_state = False
 
-        # joint limits
+        # =====================================================
+        # JOINT LIMITS
+        # =====================================================
+
         self.joint_limits = np.array([
+
             [-math.pi, math.pi],
-            [-1.57, 1.57],
-            [-1.57, 1.57],
-            [-1.57, 1.57],
-            [-1.57, 1.57],
+
+            [-1.57, 1.0],
+
+            [-1.57, 1.0],
+
+            [-1.57, 1.0],
+
+            [-1.57, 1.0],
+
         ])
 
-        # IK settings
-        self.damping = 0.2
-        self.max_dq = 0.05
-        self.iterations = 100
+        # =====================================================
+        # IK SETTINGS
+        # =====================================================
+
+        self.damping = 0.04
+
+        self.max_dq = 0.03
+
+        self.alpha = 0.3
+
+        self.iterations = 300
+
         self.tolerance = 0.01
 
-        # publisher
+        # =====================================================
+        # PUBLISHER
+        # =====================================================
+
         self.angle_pub = self.create_publisher(
             Float64MultiArray,
             '/joint_angles',
             10
         )
 
-        # subscribers
+        # =====================================================
+        # SUBSCRIBERS
+        # =====================================================
+
         self.create_subscription(
             JointState,
             '/joint_states',
@@ -64,7 +95,9 @@ class IKNode(Node):
             10
         )
 
-        self.get_logger().info('Simple IK node started')
+        self.get_logger().info(
+            'Stable IK node started'
+        )
 
     # =========================================================
     # JOINT STATES
@@ -81,15 +114,17 @@ class IKNode(Node):
 
             if joint in name_to_index:
 
-                idx = name_to_index[joint]
+                self.q[i] = msg.position[
+                    name_to_index[joint]
+                ]
 
-                self.q[i] = msg.position[idx]
-
-        ee = self.fk(self.q)
+        ee, _ = self.fk(self.q)
 
         print(
             f"EE Position: "
-            f"[{ee[0]:.2f}, {ee[1]:.2f}, {ee[2]:.2f}]",
+            f"[{ee[0]:.2f}, "
+            f"{ee[1]:.2f}, "
+            f"{ee[2]:.2f}]",
             flush=True
         )
 
@@ -102,7 +137,11 @@ class IKNode(Node):
     def target_cb(self, msg):
 
         if not self.have_joint_state:
-            self.get_logger().warn('Waiting for joint states...')
+
+            self.get_logger().warn(
+                'Waiting for joint states...'
+            )
+
             return
 
         target = np.array([
@@ -112,17 +151,28 @@ class IKNode(Node):
         ])
 
         self.get_logger().info(
-            f'Target: [{msg.x:.2f}, {msg.y:.2f}, {msg.z:.2f}]'
+            f'Target: '
+            f'[{msg.x:.2f}, '
+            f'{msg.y:.2f}, '
+            f'{msg.z:.2f}]'
         )
+
+        # =====================================================
+        # IMPORTANT:
+        # CONTINUOUS LOCAL IK
+        # =====================================================
 
         q_sol = self.compute_ik(
             self.q.copy(),
             target
         )
 
+        # =====================================================
+        # PUBLISH
+        # =====================================================
+
         out = Float64MultiArray()
 
-        # 7 joints expected by controller
         out.data = [
             q_sol[0],
             q_sol[1],
@@ -136,24 +186,43 @@ class IKNode(Node):
         self.angle_pub.publish(out)
 
         self.get_logger().info(
-            f'Published: {[round(math.degrees(v),1) for v in q_sol]} deg'
+            f'Published: '
+            f'{[round(math.degrees(v),1) for v in q_sol]} deg'
         )
 
     # =========================================================
-    # FK
+    # FORWARD KINEMATICS
     # =========================================================
 
     def fk(self, q):
 
         T = np.eye(4)
 
-        T = T @ self.trans(0, 0, 0.1) @ self.rotz(q[0])
-        T = T @ self.trans(0, 0, 1.67744) @ self.rotx(q[1])
-        T = T @ self.trans(0, -0.007232, 2.92735) @ self.rotx(q[2])
-        T = T @ self.trans(0, 0.002234, 2.9244) @ self.rotx(q[3])
-        T = T @ self.trans(0, 0.012929, 2.12653) @ self.rotx(q[4])
+        # BASE
+        T = T @ self.trans(0, 0, 0.1)
+        T = T @ self.rotz(q[0])
 
-        return T[:3, 3]
+        # LINK 1
+        T = T @ self.roty(q[1])
+        T = T @ self.trans(0, 0, 1.67744)
+
+        # LINK 2
+        T = T @ self.roty(q[2])
+        T = T @ self.trans(0, 0, 2.92735)
+
+        # LINK 3
+        T = T @ self.roty(q[3])
+        T = T @ self.trans(0, 0, 2.9244)
+
+        # LINK 4
+        T = T @ self.roty(q[4])
+        T = T @ self.trans(0, 0, 2.12653)
+
+        position = T[:3, 3]
+
+        rotation = T[:3, :3]
+
+        return position, rotation
 
     # =========================================================
     # FK FRAMES
@@ -164,45 +233,99 @@ class IKNode(Node):
         T = np.eye(4)
 
         origins = []
+
         axes = []
+
+        # BASE
 
         T = T @ self.trans(0, 0, 0.1)
 
-        origins.append(T[:3, 3].copy())
-        axes.append(T[:3, :3] @ np.array([0, 0, 1]))
+        origins.append(
+            T[:3, 3].copy()
+        )
+
+        axes.append(
+            T[:3, :3] @ np.array([0, 0, 1])
+        )
 
         T = T @ self.rotz(q[0])
 
-        T = T @ self.trans(0, 0, 1.67744)
+        # JOINT 1
 
-        origins.append(T[:3, 3].copy())
-        axes.append(T[:3, :3] @ np.array([1, 0, 0]))
+        origins.append(
+            T[:3, 3].copy()
+        )
 
-        T = T @ self.rotx(q[1])
+        axes.append(
+            T[:3, :3] @ np.array([0, 1, 0])
+        )
 
-        T = T @ self.trans(0, -0.007232, 2.92735)
+        T = T @ self.roty(q[1])
 
-        origins.append(T[:3, 3].copy())
-        axes.append(T[:3, :3] @ np.array([1, 0, 0]))
+        T = T @ self.trans(
+            0,
+            0,
+            1.67744
+        )
 
-        T = T @ self.rotx(q[2])
+        # JOINT 2
 
-        T = T @ self.trans(0, 0.002234, 2.9244)
+        origins.append(
+            T[:3, 3].copy()
+        )
 
-        origins.append(T[:3, 3].copy())
-        axes.append(T[:3, :3] @ np.array([1, 0, 0]))
+        axes.append(
+            T[:3, :3] @ np.array([0, 1, 0])
+        )
 
-        T = T @ self.rotx(q[3])
+        T = T @ self.roty(q[2])
 
-        T = T @ self.trans(0, 0.012929, 2.12653)
+        T = T @ self.trans(
+            0,
+            0,
+            2.92735
+        )
 
-        origins.append(T[:3, 3].copy())
-        axes.append(T[:3, :3] @ np.array([1, 0, 0]))
+        # JOINT 3
+
+        origins.append(
+            T[:3, 3].copy()
+        )
+
+        axes.append(
+            T[:3, :3] @ np.array([0, 1, 0])
+        )
+
+        T = T @ self.roty(q[3])
+
+        T = T @ self.trans(
+            0,
+            0,
+            2.9244
+        )
+
+        # JOINT 4
+
+        origins.append(
+            T[:3, 3].copy()
+        )
+
+        axes.append(
+            T[:3, :3] @ np.array([0, 1, 0])
+        )
+
+        T = T @ self.roty(q[4])
+
+        T = T @ self.trans(
+            0,
+            0,
+            2.12653
+        )
 
         return T[:3, 3], origins, axes
 
     # =========================================================
-    # JACOBIAN
+    # POSITION JACOBIAN
     # =========================================================
 
     def jacobian(self, q):
@@ -228,40 +351,139 @@ class IKNode(Node):
 
         for i in range(self.iterations):
 
-            current = self.fk(q)
+            # =================================================
+            # CURRENT FK
+            # =================================================
 
-            error = target - current
+            current, rotation = self.fk(q)
 
-            error_norm = np.linalg.norm(error)
+            # =================================================
+            # POSITION ERROR
+            # =================================================
+
+            pos_error = target - current
+
+            # =================================================
+            # REAL END EFFECTOR DIRECTION
+            # =================================================
+
+            ee_z = rotation[:, 2]
+
+            # =================================================
+            # DESIRED TOOL DIRECTION
+            # =================================================
+
+            desired_down = np.array([
+                0.0,
+                0.0,
+                -1.0
+            ])
+
+            # =================================================
+            # ORIENTATION ERROR
+            # =================================================
+
+            orient_error = np.cross(
+                ee_z,
+                desired_down
+            )
+
+            # =================================================
+            # COMBINED ERROR
+            # =================================================
+
+            orientation_weight = 0.15
+
+            error = np.concatenate([
+                pos_error,
+                orientation_weight
+                * orient_error[0:1]
+            ])
+
+            # =================================================
+            # CONVERGENCE
+            # =================================================
+
+            error_norm = np.linalg.norm(
+                pos_error
+            )
 
             print(
                 f"Iter {i} | "
-                f"Current: {current.round(3)} | "
-                f"Target: {target.round(3)} | "
-                f"Error: {error.round(3)} | "
-                f"Norm: {error_norm:.4f}",
+                f"Pos Error: "
+                f"{error_norm:.4f}",
                 flush=True
             )
 
             if error_norm < self.tolerance:
-                print("IK CONVERGED", flush=True)
+
+                print(
+                    "IK CONVERGED",
+                    flush=True
+                )
+
                 break
 
-            J = self.jacobian(q)
+            # =================================================
+            # POSITION JACOBIAN
+            # =================================================
+
+            J_pos = self.jacobian(q)
+
+            # =================================================
+            # ORIENTATION JACOBIAN
+            # =================================================
+
+            J_orient = np.array([
+                [0, 1, 1, 1, 1]
+            ])
+
+            # =================================================
+            # FULL JACOBIAN
+            # =================================================
+
+            J = np.vstack([
+                J_pos,
+                orientation_weight
+                * J_orient
+            ])
+
+            # =================================================
+            # DAMPED LEAST SQUARES
+            # =================================================
 
             lhs = (
                 J @ J.T
-                + (self.damping ** 2) * np.eye(3)
+                + (self.damping ** 2)
+                * np.eye(4)
             )
 
-            dq = J.T @ np.linalg.solve(lhs, error)
+            dq = J.T @ np.linalg.solve(
+                lhs,
+                error
+            )
+
+            # =================================================
+            # SMALL LOCAL MOTION
+            # =================================================
 
             norm = np.linalg.norm(dq)
 
             if norm > self.max_dq:
-                dq *= self.max_dq / norm
 
-            q += dq
+                dq *= (
+                    self.max_dq / norm
+                )
+
+            # =================================================
+            # CONTINUOUS LOCAL UPDATE
+            # =================================================
+
+            q += self.alpha * dq
+
+            # =================================================
+            # JOINT LIMITS
+            # =================================================
 
             q = np.clip(
                 q,
@@ -283,21 +505,23 @@ class IKNode(Node):
 
         return T
 
-    def rotx(self, a):
+    def roty(self, a):
 
         c = math.cos(a)
+
         s = math.sin(a)
 
         return np.array([
-            [1, 0, 0, 0],
-            [0, c, -s, 0],
-            [0, s, c, 0],
+            [c, 0, s, 0],
+            [0, 1, 0, 0],
+            [-s, 0, c, 0],
             [0, 0, 0, 1]
         ])
 
     def rotz(self, a):
 
         c = math.cos(a)
+
         s = math.sin(a)
 
         return np.array([
@@ -307,6 +531,10 @@ class IKNode(Node):
             [0, 0, 0, 1]
         ])
 
+
+# =============================================================
+# MAIN
+# =============================================================
 
 def main():
 
@@ -322,4 +550,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()

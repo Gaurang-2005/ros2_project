@@ -120,7 +120,7 @@ class TeleopIK(Node):
             self.get_parameter('edge_warning_margin').value
         )
 
-        self.target_pub = self.create_publisher(Float64MultiArray, '/target_angles_deg', 10)
+        self.target_pub = self.create_publisher(Float64MultiArray, '/joint_angle', 10)
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_cb, 10)
         self.create_subscription(JointState, '/joint_states', self.joint_state_cb, 10)
